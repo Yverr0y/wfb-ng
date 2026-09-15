@@ -33,7 +33,7 @@ from twisted.internet.protocol import ProcessProtocol, Factory, ConnectedDatagra
 from twisted.protocols.basic import LineReceiver, Int32StringReceiver
 
 from .conf import settings
-from .common import fatal_error
+from .common import fatal_error, abort_on_crash
 
 class BadTelemetry(Exception):
     pass
@@ -212,7 +212,7 @@ class RFTempMeter(object):
         self.rf_temperature = {}
 
         self.lc = task.LoopingCall(self.read_temperature)
-        self.lc.start(measurement_interval, now=True)
+        self.lc.start(measurement_interval, now=True).addErrback(abort_on_crash)
 
     def _cleanup(self):
         self.lc.stop()
@@ -303,7 +303,7 @@ class AntStatsAndSelector(object):
         self.rf_temp_meter = rf_temp_meter
 
         self.lc = task.LoopingCall(self.aggregate_stats)
-        self.lc.start(settings.common.log_interval / 1000.0, now=False)
+        self.lc.start(settings.common.log_interval / 1000.0, now=False).addErrback(abort_on_crash)
 
     def _cleanup(self):
         self.lc.stop()
@@ -666,15 +666,17 @@ class TXProtocol(ProcessProtocol):
     def errReceived(self, data):
         self.dbg.dataReceived(data)
 
-    def processEnded(self, status):
-        rc = status.value.exitCode
-        log.msg('Stopped TX %s with code %s' % (self.tx_id, rc))
-
+    def _release_waiters(self):
         if self.ports_df is not None:
             self.ports_df.cancel()
 
         if self.control_port_df is not None:
             self.control_port_df.cancel()
+
+    def processEnded(self, status):
+        rc = status.value.exitCode
+        log.msg('Stopped TX %s with code %s' % (self.tx_id, rc))
+        self._release_waiters()
 
         if rc == 0:
             self.df.callback(str(status.value))
@@ -682,9 +684,14 @@ class TXProtocol(ProcessProtocol):
             self.df.errback(status)
 
     def start(self):
+        def _spawn_failed(f):
+            # No child process exists, so processEnded() will never run
+            self._release_waiters()
+            return f
+
         df = defer.maybeDeferred(reactor.spawnProcess, self, self.cmd[0], self.cmd, env=os.environ,
                                  childFDs={0: "w", 1: "r", 2: "r"})
-        return df.addCallback(lambda _: self.df)
+        return df.addCallbacks(lambda _: self.df, _spawn_failed)
 
 
 class SSHClientProtocol(ProcessProtocol):
@@ -699,7 +706,7 @@ class SSHClientProtocol(ProcessProtocol):
         self.cmd_args = cmd_args
         self.stdin = stdin
         self.key = key
-        self.port = 22
+        self.port = port
         self.use_agent = use_agent
         self.dbg = DbgProtocol('ssh %s' % (host,))
         self.df = defer.Deferred()
@@ -724,8 +731,9 @@ class SSHClientProtocol(ProcessProtocol):
         else:
             self.df.errback(status)
 
-    def start(self):
+    def ssh_args(self):
         args = ['ssh',
+                '-p', str(self.port),
                 '-o', 'StrictHostKeyChecking=no',
                 '-o', 'KbdInteractiveAuthentication=no',
                 '-o', 'PasswordAuthentication=no']
@@ -737,8 +745,10 @@ class SSHClientProtocol(ProcessProtocol):
             args += ['-i', self.key,
                      '-o', 'IdentitiesOnly=yes']
 
-        args += ['%s@%s' % (self.username, self.host), self.cmd] + list(self.cmd_args)
+        return args + ['%s@%s' % (self.username, self.host), self.cmd] + list(self.cmd_args)
 
+    def start(self):
+        args = self.ssh_args()
         env = dict(os.environ)
 
         if not self.use_agent:

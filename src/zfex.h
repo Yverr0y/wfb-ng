@@ -48,7 +48,7 @@ zfex_status_code_t fec_free(fec_t* p);
  * @param fecs buffers into which the secondary blocks will be written, all blocks indicated through block_nums must begin at an address aligned to ZFEX_SIMD_ALIGNMENT
  * @param block_nums the numbers of the desired check blocks (the id >= k) which fec_encode() will produce and store into the buffers of the fecs parameter
  * @param num_block_nums the length of the block_nums array
- * @param sz size of a packet in bytes
+ * @param sz size of a packet in bytes, must be a multiple of ZFEX_SIMD_ALIGNMENT
  *
  * @return EXIT_SUCCESS if all the input was validated as correct, EXIT_FAILURE otherwise
  */
@@ -62,7 +62,7 @@ zfex_status_code_t fec_encode_simd(
  * @param inpkts an array of packets (size k); If a primary block, i, is present then it must be at index i. Secondary blocks can appear anywhere.
  * @param outpkts an array of buffers into which the reconstructed output packets will be written (only packets which are not present in the inpkts input will be reconstructed and written to outpkts)
  * @param index an array of the blocknums of the packets in inpkts
- * @param sz size of a packet in bytes
+ * @param sz size of a packet in bytes, must be a multiple of ZFEX_SIMD_ALIGNMENT
  *
  * @return EXIT_SUCCESS if all the input was validated as correct, EXIT_FAILURE otherwise
  */

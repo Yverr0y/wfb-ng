@@ -795,6 +795,10 @@ zfex_status_code_t fec_encode_simd(
     gf * ZFEX_RESTRICT const * ZFEX_RESTRICT const fecs,
     size_t const sz)
 {
+    if (sz % ZFEX_SIMD_ALIGNMENT != 0)
+    {
+        return ZFEX_SC_BAD_BLOCK_SIZE;
+    }
 
     /* Verify input blocks addresses */
     for (size_t ix = 0; ix < code->k; ++ix)
@@ -898,6 +902,11 @@ fec_decode_simd(
 {
     gf *m_dec = (gf *)alloca((size_t)code->k * (size_t)code->k);
     uint16_t outix = 0;
+
+    if (sz % ZFEX_SIMD_ALIGNMENT != 0)
+    {
+        return ZFEX_SC_BAD_BLOCK_SIZE;
+    }
 
     zfex_status_code_t const shuffle_sc = shuffle(inpkts, index, code->k);
     if (shuffle_sc != ZFEX_SC_OK)

@@ -30,6 +30,7 @@ from pyroute2 import IPRoute
 from contextlib import closing
 
 from .conf import settings
+from .common import abort_on_crash
 from .proxy import ProxyProtocol
 
 
@@ -154,7 +155,7 @@ class TUNTAPProtocol(Protocol, ProxyProtocol):
 
         # Sent keepalive packets
         self.lc = task.LoopingCall(self.send_keepalive)
-        self.lc.start(self.keepalive_interval, now=False)
+        self.lc.start(self.keepalive_interval, now=False).addErrback(abort_on_crash)
         self.pkt_in_sem = 0
         self.pkt_out_sem = 0
 

@@ -19,12 +19,13 @@
 #
 
 import time
+from errno import EPERM
 from twisted.python import log
 from twisted.trial import unittest
 from twisted.internet import reactor, defer
 from twisted.internet.protocol import DatagramProtocol
 from ..mavlink import MAVLink_heartbeat_message, MAVLink
-from ..proxy import UDPProxyProtocol, MavlinkUDPProxyProtocol
+from ..proxy import ProxyProtocol, UDPProxyProtocol, MavlinkUDPProxyProtocol
 from ..mavlink_protocol import MavlinkARMProtocol
 from ..common import df_sleep
 
@@ -132,3 +133,48 @@ class UDPProxyTestCase(unittest.TestCase):
 
     def test_arm_protocol_mav2(self):
         return self.__test_arm_protocol(False)
+
+
+class SentPeer:
+    def __init__(self):
+        self.sent = []
+
+    def write(self, data):
+        self.sent.append(data)
+
+
+class AggregationTestCase(unittest.TestCase):
+    def setUp(self):
+        self.peer = SentPeer()
+        self.p = ProxyProtocol(agg_max_size=100, agg_timeout=0.05)
+        self.p.peer = self.peer
+
+    def tearDown(self):
+        self.p._cleanup()
+
+    @defer.inlineCallbacks
+    def test_empty_datagram_does_not_break_timeout_flush(self):
+        self.p.messageReceived(b'')
+        yield df_sleep(0.1)
+        self.p.messageReceived(b'data')
+        yield df_sleep(0.1)
+        self.assertEqual(self.peer.sent, [b'data'])
+
+    def test_overflow_flushes_queued_data_first(self):
+        self.p.messageReceived(b'a' * 60)
+        self.p.messageReceived(b'b' * 60)
+        self.p.flush_queue()
+        self.assertEqual(self.peer.sent, [b'a' * 60, b'b' * 60])
+
+    def test_failed_send_drops_batch(self):
+        def fail(data):
+            raise OSError(EPERM, 'Operation not permitted')
+
+        self.peer.write = fail
+        self.p.messageReceived(b'old')
+        self.assertRaises(OSError, self.p.flush_queue)
+
+        del self.peer.write
+        self.p.messageReceived(b'new')
+        self.p.flush_queue()
+        self.assertEqual(self.peer.sent, [b'new'])

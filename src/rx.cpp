@@ -705,6 +705,13 @@ void Aggregator::process_packet(const uint8_t *buf, size_t size, uint8_t wlan_id
             count_p_bad += 1;
             return;
         }
+
+        if(fec_p == NULL)
+        {
+            // No session yet, session_key is still all zeros
+            count_p_dec_err += 1;
+            return;
+        }
         break;
 
     case WFB_PACKET_SESSION:

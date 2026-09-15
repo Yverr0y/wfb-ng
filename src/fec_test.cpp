@@ -30,7 +30,7 @@
 TEST_CASE("FEC benchmark", "[benchmark]")
 {
     const int k = 8, n = 12;
-    const int block_size = 4095; // test non-multiple simd size
+    const int block_size = 4096;
     fec_t *fec_p;
 
     fec_new(k, n, &fec_p);
@@ -92,6 +92,40 @@ TEST_CASE("FEC benchmark", "[benchmark]")
     for(int i=0; i < n; i++)
     {
         free(block_enc[i]);
+    }
+
+    fec_free(fec_p);
+}
+
+TEST_CASE("FEC rejects block size not multiple of SIMD alignment", "[api]")
+{
+    const int k = 2, n = 3;
+    const int block_size = ZFEX_SIMD_ALIGNMENT * 4 - 1;
+    fec_t *fec_p;
+
+    fec_new(k, n, &fec_p);
+    REQUIRE(fec_p != NULL);
+
+    uint8_t *block[n];
+
+    for(int i = 0; i < n; i++)
+    {
+        int rc = posix_memalign((void**)&block[i], ZFEX_SIMD_ALIGNMENT, ZFEX_ROUND_UP_SIMD(block_size));
+        assert(rc == 0);
+        memset(block[i], 0, ZFEX_ROUND_UP_SIMD(block_size));
+    }
+
+    REQUIRE(fec_encode_simd(fec_p, (const uint8_t**)block, block + k, block_size) == ZFEX_SC_BAD_BLOCK_SIZE);
+
+    unsigned index[k] = {0, 2};
+    uint8_t *dec_in[k] = {block[0], block[2]};
+    uint8_t *dec_out[n - k] = {block[1]};
+
+    REQUIRE(fec_decode_simd(fec_p, (const uint8_t**)dec_in, dec_out, index, block_size) == ZFEX_SC_BAD_BLOCK_SIZE);
+
+    for(int i = 0; i < n; i++)
+    {
+        free(block[i]);
     }
 
     fec_free(fec_p);

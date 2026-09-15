@@ -20,6 +20,7 @@
 
 import struct
 import time
+from binascii import crc_hqx
 
 from . import call_and_check_rc
 from .mavlink import MAV_MODE_FLAG_SAFETY_ARMED, MAVLINK_MSG_ID_HEARTBEAT, mavlink_map
@@ -68,6 +69,26 @@ def unpack_mavlink(msg_id, mbuf):
     return msgtype.msgname, fmap
 
 
+# CRC-16/MCRF4XX (mavlink x25crc) is the bit-reflected form of CRC-16/XMODEM,
+# so it can be computed by the C-speed crc_hqx over bit-reversed bytes.
+bit_reverse_map = bytes(int('{:08b}'.format(i)[::-1], 2) for i in range(256))
+
+
+def mavlink_crc_ok(frame, hlen):
+    plen = frame[1]
+    msg_id = frame[5] if hlen == 6 else frame[7] | (frame[8] << 8) | (frame[9] << 16)
+    msgtype = mavlink_map.get(msg_id)
+
+    if msgtype is None:
+        # Message from unknown dialect, no crc_extra to check with
+        return True
+
+    end = hlen + plen
+    crc = crc_hqx(frame[1:end].translate(bit_reverse_map), 0xffff)
+    crc = crc_hqx(bit_reverse_map[msgtype.crc_extra:msgtype.crc_extra + 1], crc)
+    return (bit_reverse_map[crc & 0xff] << 8 | bit_reverse_map[crc >> 8]) == (frame[end] | frame[end + 1] << 8)
+
+
 def parse_mavlink_l2_v1(msg):
     plen, seq, sys_id, comp_id, msg_id = struct.unpack('<BBBBB', msg[1:6])
     return ((seq, sys_id, comp_id, msg_id), bytes(msg[6:6 + plen]))
@@ -105,17 +126,32 @@ def mavlink_parser_gen(parse_l2=False):
 
             # mavlink 1
             if version == 0xfe:
+                hlen = 6
                 mlen = 8 + buffer[skip + 1]
 
             # mavlink 2
             elif version == 0xfd:
+                hlen = 10
                 mlen, flags = struct.unpack('BB', buffer[skip + 1 : skip + 3])
 
                 if flags & ~0x01:
-                    log.msg('Unsupported mavlink flags: 0x%x' % (flags,))
+                    # Unknown incompatible flag, frame layout is unknown
+                    skip += 1
+                    bad += 1
+                    continue
 
                 mlen += (25 if flags & 0x01 else 12)
             else:
+                skip += 1
+                bad += 1
+                continue
+
+            if len(buffer) - skip < mlen:
+                break
+
+            frame = buffer[skip: skip + mlen]
+
+            if not mavlink_crc_ok(frame, hlen):
                 skip += 1
                 bad += 1
                 continue
@@ -124,13 +160,10 @@ def mavlink_parser_gen(parse_l2=False):
                 log.msg('skip %d bad bytes before sync' % (bad,))
                 bad = 0
 
-            if len(buffer) - skip < mlen:
-                break
-
             if parse_l2:
-                mlist.append(parse_map[version](buffer[skip: skip + mlen]))
+                mlist.append(parse_map[version](frame))
             else:
-                mlist.append(bytes(buffer[skip: skip + mlen]))
+                mlist.append(bytes(frame))
 
             skip += mlen
 

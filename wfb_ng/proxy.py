@@ -42,14 +42,19 @@ class ProxyProtocol:
             self.agg_queue_timer.cancel()
 
     def flush_queue(self):
-        if self.agg_queue_size > 0:
-            if self.agg_queue_timer is not None \
-               and not self.agg_queue_timer.called:
+        if self.agg_queue_timer is not None:
+            if not self.agg_queue_timer.called:
                 self.agg_queue_timer.cancel()
             self.agg_queue_timer = None
-            self._send_to_peer(b''.join(self.agg_queue))
-            self.agg_queue = []
-            self.agg_queue_size = 0
+
+        if self.agg_queue_size == 0:
+            return
+
+        # Take the batch out of the queue before sending: a failed send must not leave stale data queued
+        data = b''.join(self.agg_queue)
+        self.agg_queue = []
+        self.agg_queue_size = 0
+        self._send_to_peer(data)
 
     # call from peer and from mavlink rssi injector only!
     def write(self, msg):
@@ -64,19 +69,16 @@ class ProxyProtocol:
         if self.agg_max_size is None or not self.agg_timeout:
             return self._send_to_peer(data)
 
+        if not data:
+            return
+
         if len(data) > self.agg_max_size:
             log.msg('Message too big: %d > %d' % (len(data), self.agg_max_size), isError=1)
             return
 
         if self.agg_queue_size + len(data) > self.agg_max_size:
             # message doesn't fit into agg queue
-            if self.agg_queue_timer is not None:
-                self.agg_queue_timer.cancel()
-                self.agg_queue_timer = None
-
-            self._send_to_peer(b''.join(self.agg_queue))
-            self.agg_queue = []
-            self.agg_queue_size = 0
+            self.flush_queue()
 
         self.agg_queue.append(data)
         self.agg_queue_size += len(data)

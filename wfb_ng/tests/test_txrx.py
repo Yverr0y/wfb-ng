@@ -28,7 +28,7 @@ import itertools
 
 from twisted.python import log
 from twisted.trial import unittest
-from twisted.internet import reactor, defer
+from twisted.internet import reactor, defer, error
 from twisted.internet.protocol import DatagramProtocol
 
 from ..common import df_sleep
@@ -67,12 +67,15 @@ def gen_req_id(f):
 
 
 class FakeAntennaProtocol(object):
+    rx_stats = None
+
     def process_new_session(self, rx_id, session):
         log.msg('%s new session %r' % (rx_id, session))
 
 
     def update_rx_stats(self, rx_id, packet_stats, ant_stats, session):
         log.msg('%s %r %r %r' % (rx_id, packet_stats, ant_stats, session))
+        self.rx_stats = packet_stats
 
         for (((freq, mcs_index, bandwidth), ant_id),
              (pkt_s,
@@ -199,9 +202,9 @@ class TXRXTestCase(unittest.TestCase):
                   # '-Q', '-P 1',  ## requires root priv
                   '-i', str(link_id), '-e', str(epoch), '-R', str(512 * 1024), '-s', str(512 * 1024), 'wlan0']
 
-        ap = FakeAntennaProtocol()
-        self.rx_pp = RXProtocol(ap, cmd_rx, 'debug rx')
-        self.tx_pp = TXProtocol(ap, cmd_tx, 'debug tx')
+        self.ap = FakeAntennaProtocol()
+        self.rx_pp = RXProtocol(self.ap, cmd_rx, 'debug rx')
+        self.tx_pp = TXProtocol(self.ap, cmd_tx, 'debug tx')
 
         self.rx_pp.start().addErrback(lambda f: f.trap('twisted.internet.error.ProcessTerminated'))
         self.tx_pp.start().addErrback(lambda f: f.trap('twisted.internet.error.ProcessTerminated'))
@@ -211,13 +214,30 @@ class TXRXTestCase(unittest.TestCase):
 
     @defer.inlineCallbacks
     def tearDown(self):
-        self.rx_pp.transport.signalProcess('KILL')
-        self.tx_pp.transport.signalProcess('KILL')
+        for pp in (self.rx_pp, self.tx_pp):
+            try:
+                pp.transport.signalProcess('KILL')
+            except error.ProcessExitedAlready:
+                pass
+
         self.rx_ep.stopListening()
         self.tx_ep.stopListening()
         self.cmd_ep.stopListening()
         # Wait for tx/rx processes to die
         yield df_sleep(0.1)
+
+    @defer.inlineCallbacks
+    def test_data_before_session_is_rejected(self):
+        # wblock_hdr_t + AEAD(wpacket_hdr_t + b'hello') under the all-zero session key, nonce 0
+        zero_key_pkt = bytes.fromhex('010000000000000000'
+                                     '9f07e2d6303d54156b13bcdbdb22d533e1eddb611885edcb')
+        self.txp.send_msg(b'm1')
+        yield df_sleep(0.1)
+        fwd_hdr = self.txp.rxq[0][:17]  # wrxfwd_t of the real session packet
+        self.rxp.send_msg(fwd_hdr + zero_key_pkt)
+        yield df_sleep(1.1)  # wait stats refresh
+        self.assertEqual(self.ap.rx_stats['data'][1], 0)
+        self.assertEqual(self.ap.rx_stats['dec_err'][1], 1)
 
     def test_keys(self):
         keys = [open(k, 'rb').read() for k in ('gs.key', 'drone.key')]
@@ -482,9 +502,9 @@ class UNIXTXRXTestCase(TXRXTestCase):
                   # '-Q', '-P 1',  ## requires root priv
                   '-i', str(link_id), '-e', str(epoch), '-R', str(512 * 1024), '-s', str(512 * 1024), 'wlan0']
 
-        ap = FakeAntennaProtocol()
-        self.rx_pp = RXProtocol(ap, cmd_rx, 'debug rx')
-        self.tx_pp = TXProtocol(ap, cmd_tx, 'debug tx')
+        self.ap = FakeAntennaProtocol()
+        self.rx_pp = RXProtocol(self.ap, cmd_rx, 'debug rx')
+        self.tx_pp = TXProtocol(self.ap, cmd_tx, 'debug tx')
 
         self.rx_pp.start().addErrback(lambda f: f.trap('twisted.internet.error.ProcessTerminated'))
         self.tx_pp.start().addErrback(lambda f: f.trap('twisted.internet.error.ProcessTerminated'))
@@ -494,8 +514,12 @@ class UNIXTXRXTestCase(TXRXTestCase):
 
     @defer.inlineCallbacks
     def tearDown(self):
-        self.rx_pp.transport.signalProcess('KILL')
-        self.tx_pp.transport.signalProcess('KILL')
+        for pp in (self.rx_pp, self.tx_pp):
+            try:
+                pp.transport.signalProcess('KILL')
+            except error.ProcessExitedAlready:
+                pass
+
         self.rx_ep.stopListening()
         self.tx_ep.stopListening()
         self.rx_tx_ep.stopListening()

@@ -54,6 +54,18 @@ def hash_link_domain(link_domain):
     return int.from_bytes(hashlib.sha1(link_domain.encode('utf-8')).digest()[:3], 'big')
 
 
+def make_ant_sel_cb(service_name, p_in, p_tx_map):
+    def ant_sel_cb(wlan_id):
+        if wlan_id is None:
+            p_in.peer = list(p_tx_map.values())[0]
+        elif wlan_id in p_tx_map:
+            p_in.peer = p_tx_map[wlan_id]
+        else:
+            log.msg('%s: no TX socket for wlan %x, keep current' % (service_name, wlan_id), isError=1)
+
+    return ant_sel_cb
+
+
 def parse_services(profile_name, udp_port_allocator, cfg_settings=None):
     if cfg_settings is None:
         cfg_settings = settings
@@ -334,10 +346,7 @@ def init_mavlink(service_name, cfg, wlans, link_id, ant_sel_f, is_cluster, rx_on
 
     sockets += [ reactor.listenUNIXDatagram(None, p_tx) for p_tx in p_tx_map.values() ]
 
-    def ant_sel_cb(wlan_id):
-        p_in.peer = p_tx_map[wlan_id] \
-            if wlan_id is not None \
-               else list(p_tx_map.values())[0]
+    ant_sel_cb = make_ant_sel_cb(service_name, p_in, p_tx_map)
 
     if p_tx_map:
         ant_sel_f.add_ant_sel_cb(ant_sel_cb)
@@ -438,10 +447,7 @@ def init_tunnel(service_name, cfg, wlans, link_id, ant_sel_f, is_cluster, rx_onl
     yield tun_ep.setup()
     sockets += [ reactor.listenUNIXDatagram(None, p_tx) for p_tx in p_tx_map.values() ]
 
-    def ant_sel_cb(wlan_id):
-        p_in.peer = p_tx_map[wlan_id] \
-            if wlan_id is not None \
-               else list(p_tx_map.values())[0]
+    ant_sel_cb = make_ant_sel_cb(service_name, p_in, p_tx_map)
 
     # Broadcast keepalive message to all cards, not to active one
     # This allow to use direct antennas on both ends and/or differenct frequencies.
@@ -561,10 +567,7 @@ def init_udp_proxy(service_name, cfg, wlans, link_id, ant_sel_f, is_cluster, rx_
         p_tx_map = dict((wlan_id, UDPProxyProtocol(b'\0' + tx_socket.encode())) for wlan_id, tx_socket in tx_sockets.items() if wlan_id not in rx_only_wlan_ids)
         sockets += [ reactor.listenUNIXDatagram(None, p_tx) for p_tx in p_tx_map.values() ]
 
-        def ant_sel_cb(wlan_id):
-            p_in.peer = p_tx_map[wlan_id] \
-                if wlan_id is not None \
-                   else list(p_tx_map.values())[0]
+        ant_sel_cb = make_ant_sel_cb(service_name, p_in, p_tx_map)
 
         if p_tx_map:
             ant_sel_f.add_ant_sel_cb(ant_sel_cb)

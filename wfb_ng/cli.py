@@ -258,7 +258,7 @@ class AntennaStat(Int32StringReceiver, TimeoutMixin):
                 addstr_markup(window, y_off, 20, '{Freq:} %s' % (fl,))
                 y_off += 1
 
-            addstr_markup(window, y_off + 1, 20, '%s[ANT]%s pkt/s dloss}     {RSSI} [dBm]        {SNR} [dB]' % (lpad, rpad))
+            addstr_markup(window, y_off + 1, 20, '{%s[ANT]%s pkt/s dloss}     {RSSI} [dBm]        {SNR} [dB]' % (lpad, rpad))
 
             for y, (ant_id, v) in enumerate(sorted(ant_stats.items()), y_off + 2):
                 pkt_s, rssi_min, rssi_avg, rssi_max, snr_min, snr_avg, snr_max = v
